@@ -1,0 +1,1396 @@
+
+
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
+local Mouse = LocalPlayer:GetMouse()
+
+-- =====================================================
+-- КОНФИГ
+-- =====================================================
+local Config = {
+    ESP = {
+        Enabled = false,
+        TeamCheck = true,
+        MaxDistance = 500,
+        ShowTracers = true
+    },
+    Aimbot = {
+        Enabled = false,
+        Smoothness = 0.18,
+        FOV = 300,
+        HoldTarget = true,
+        TeamCheck = true,
+        Magnetic = true,
+        MagneticStrength = 1.2,
+        LockTarget = true
+    },
+    AntiAim = {
+        Enabled = false
+    },
+    ShowStatus = true,
+    TriggerBot = {
+        Enabled = false,
+        Delay = 0.15,
+        WallCheck = true,
+        TeamCheck = true
+    },
+    HitboxExpander = {
+        Enabled = false,
+        SizeMultiplier = 2.0,
+        TransparencyValue = 0.7,
+        PartsToExpand = {"Head", "HumanoidRootPart", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg"}
+    },
+    VelocitySpoofer = {
+        Enabled = false,
+        X_Min = -100,
+        X_Max = 100,
+        Y_Min = 0,
+        Y_Max = 50,
+        Z_Min = -100,
+        Z_Max = 100,
+        Interval = 0.05
+    },
+    KDA = {
+        ShowOverlay = true,
+        Kills = 0,
+        Deaths = 0,
+        MaxStreak = 0,
+        CurrentStreak = 0
+    },
+    BunnyHop = {
+        Enabled = false,
+        JumpPower = 50,
+        AutoStrafe = false,
+        StrafeSpeed = 5,
+        StrafeSmoothness = 0.15,
+        HoldSpaceOnly = true,
+        UseVelocity = true,
+        GroundCheckDistance = 3.5
+    }
+}
+
+-- =====================================================
+-- СОСТОЯНИЯ
+-- =====================================================
+local IsAiming = false
+local CurrentTarget = nil
+local LockedTarget = nil
+local TriggerBotLastFire = 0
+local HitboxObjects = {}
+local VelocitySpooferRunning = false
+local VelocitySpooferConnection = nil
+local LastHealth = 0
+local HealthCheckConnection = nil
+local BunnyHopConnection = nil
+local BunnyHopRunning = false
+local IsSpaceHeld = false
+local WasOnGround = true
+local LastJumpTime = 0
+local StrafeDirection = 1
+
+-- =====================================================
+-- DRAWING ОБЪЕКТЫ
+-- =====================================================
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Visible = false
+FOVCircle.Radius = Config.Aimbot.FOV
+FOVCircle.Thickness = 2
+FOVCircle.Color = Color3.fromRGB(255, 0, 0)
+FOVCircle.Filled = false
+FOVCircle.Transparency = 0.8
+
+local StatusText = Drawing.new("Text")
+StatusText.Visible = true
+StatusText.Text = "ESP:OFF | AIM:OFF"
+StatusText.Color = Color3.fromRGB(255, 255, 255)
+StatusText.Size = 18
+StatusText.Font = 3
+StatusText.Position = Vector2.new(10, 10)
+StatusText.Transparency = 0.7
+StatusText.Outline = true
+StatusText.OutlineColor = Color3.fromRGB(0, 0, 0)
+
+local KDAOverlay = Drawing.new("Text")
+KDAOverlay.Visible = true
+KDAOverlay.Text = "K:0 | D:0 | KD:0.0 | Streak:0 | Max:0"
+KDAOverlay.Color = Color3.fromRGB(255, 255, 255)
+KDAOverlay.Size = 16
+KDAOverlay.Font = 3
+KDAOverlay.Position = Vector2.new(10, 35)
+KDAOverlay.Transparency = 0.7
+KDAOverlay.Outline = true
+KDAOverlay.OutlineColor = Color3.fromRGB(0, 0, 0)
+
+local EspObjects = {}
+
+-- =====================================================
+-- ПРОВЕРКИ
+-- =====================================================
+local function IsAlive(player)
+    if not player or not player.Parent then return false end
+    local char = player.Character
+    if not char then return false end
+    local hum = char:FindFirstChild("Humanoid")
+    if hum then
+        local success, health = pcall(function() return hum.Health end)
+        if success then return health > 0 end
+    end
+    return char:FindFirstChild("Head") ~= nil
+end
+
+local function IsTeam(player)
+    local team = LocalPlayer.Team
+    if not team then return false end
+    return player.Team == team
+end
+
+local function GetLocalHealth()
+    local char = LocalPlayer.Character
+    if not char then return 0 end
+    local hum = char:FindFirstChild("Humanoid")
+    if hum then
+        local success, health = pcall(function() return hum.Health end)
+        if success then return health end
+    end
+    return 0
+end
+
+local function IsVisible(targetPlayer)
+    local char = targetPlayer.Character
+    if not char then return false end
+    local head = char:FindFirstChild("Head")
+    if not head then return false end
+
+    local origin = Camera.CFrame.Position
+    local direction = (head.Position - origin).Unit * (head.Position - origin).Magnitude
+
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterDescendantsInstances = {LocalPlayer.Character, char}
+    raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+
+    local raycastResult = Workspace:Raycast(origin, direction, raycastParams)
+    return raycastResult == nil
+end
+
+-- =====================================================
+-- BUNNYHOP
+-- =====================================================
+local function IsOnGround()
+    local char = LocalPlayer.Character
+    if not char then return false end
+    
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    
+    local hum = char:FindFirstChild("Humanoid")
+    if hum and hum.FloorMaterial and hum.FloorMaterial ~= Enum.Material.Air then
+        return true
+    end
+    
+    local rayOrigin = hrp.Position
+    local rayDirection = Vector3.new(0, -Config.BunnyHop.GroundCheckDistance, 0)
+    
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterDescendantsInstances = {char}
+    raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+    
+    local rayResult = Workspace:Raycast(rayOrigin, rayDirection, raycastParams)
+    
+    return rayResult ~= nil
+end
+
+local function GetVelocity()
+    local char = LocalPlayer.Character
+    if not char then return Vector3.zero end
+    
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return Vector3.zero end
+    
+    return hrp.Velocity
+end
+
+local function SetVelocity(velocity)
+    local char = LocalPlayer.Character
+    if not char then return end
+    
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    
+    hrp.Velocity = velocity
+end
+
+local function GetHorizontalVelocity()
+    local vel = GetVelocity()
+    return Vector3.new(vel.X, 0, vel.Z)
+end
+
+local function GetHorizontalSpeed()
+    return GetHorizontalVelocity().Magnitude
+end
+
+local function DoJump()
+    local char = LocalPlayer.Character
+    if not char then return end
+    
+    local hum = char:FindFirstChild("Humanoid")
+    if not hum then return end
+    
+    hum.Jump = true
+    LastJumpTime = tick()
+end
+
+local function CalculateStrafeVelocity()
+    local char = LocalPlayer.Character
+    if not char then return nil end
+    
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+    
+    local hum = char:FindFirstChild("Humanoid")
+    if not hum then return nil end
+    
+    local currentVelocity = hrp.Velocity
+    local horizontalVelocity = Vector3.new(currentVelocity.X, 0, currentVelocity.Z)
+    local currentSpeed = horizontalVelocity.Magnitude
+    
+    if currentSpeed < 1 then return nil end
+    
+    local cameraCFrame = Camera.CFrame
+    local moveDirection = Vector3.zero
+    
+    local keysPressed = {
+        W = UserInputService:IsKeyDown(Enum.KeyCode.W),
+        A = UserInputService:IsKeyDown(Enum.KeyCode.A),
+        S = UserInputService:IsKeyDown(Enum.KeyCode.S),
+        D = UserInputService:IsKeyDown(Enum.KeyCode.D)
+    }
+    
+    if keysPressed.W then moveDirection = moveDirection + cameraCFrame.LookVector end
+    if keysPressed.S then moveDirection = moveDirection - cameraCFrame.LookVector end
+    if keysPressed.A then moveDirection = moveDirection - cameraCFrame.RightVector end
+    if keysPressed.D then moveDirection = moveDirection + cameraCFrame.RightVector end
+    
+    if moveDirection.Magnitude < 0.1 then
+        moveDirection = cameraCFrame.LookVector
+    end
+    
+    moveDirection = Vector3.new(moveDirection.X, 0, moveDirection.Z).Unit
+    local targetSpeed = Config.BunnyHop.StrafeSpeed * 10
+    
+    if currentSpeed < targetSpeed then
+        local addVelocity = moveDirection * (targetSpeed - currentSpeed) * Config.BunnyHop.StrafeSmoothness
+        return horizontalVelocity + addVelocity
+    elseif currentSpeed > targetSpeed then
+        local normalizedVelocity = horizontalVelocity.Unit
+        local dotProduct = normalizedVelocity:Dot(moveDirection)
+        
+        if dotProduct > 0.7 then
+            local speedToAdd = targetSpeed * 0.3
+            local addVelocity = moveDirection * speedToAdd * Config.BunnyHop.StrafeSmoothness
+            return horizontalVelocity + addVelocity
+        else
+            local newDirection = (normalizedVelocity + moveDirection * Config.BunnyHop.StrafeSmoothness).Unit
+            return newDirection * targetSpeed
+        end
+    end
+    
+    return nil
+end
+
+local function BunnyHopLogic()
+    local char = LocalPlayer.Character
+    if not char then return end
+    
+    local hum = char:FindFirstChild("Humanoid")
+    if not hum then return end
+    if hum.Health <= 0 then return end
+    
+    local onGround = IsOnGround()
+    
+    if onGround and not WasOnGround then
+        DoJump()
+        
+        if Config.BunnyHop.AutoStrafe and Config.BunnyHop.UseVelocity then
+            local newVel = CalculateStrafeVelocity()
+            if newVel then
+                local currentY = GetVelocity().Y
+                SetVelocity(Vector3.new(newVel.X, currentY, newVel.Z))
+            end
+        end
+    end
+    
+    if not onGround and Config.BunnyHop.AutoStrafe and Config.BunnyHop.UseVelocity then
+        local newVel = CalculateStrafeVelocity()
+        if newVel then
+            local currentY = GetVelocity().Y
+            SetVelocity(Vector3.new(newVel.X, currentY, newVel.Z))
+        end
+        
+        local horizontalSpeed = GetHorizontalSpeed()
+        if horizontalSpeed < Config.BunnyHop.StrafeSpeed * 8 then
+            local moveDir = Camera.CFrame.LookVector
+            moveDir = Vector3.new(moveDir.X, 0, moveDir.Z).Unit
+            local boostVelocity = moveDir * Config.BunnyHop.StrafeSpeed * 2
+            local currentVel = GetVelocity()
+            SetVelocity(Vector3.new(
+                currentVel.X + boostVelocity.X * 0.1,
+                currentVel.Y,
+                currentVel.Z + boostVelocity.Z * 0.1
+            ))
+        end
+    end
+    
+    WasOnGround = onGround
+end
+
+local function StartBunnyHop()
+    if BunnyHopRunning then return end
+    BunnyHopRunning = true
+    
+    BunnyHopConnection = RunService.RenderStepped:Connect(function()
+        if not Config.BunnyHop.Enabled then
+            StopBunnyHop()
+            return
+        end
+        
+        if Config.BunnyHop.HoldSpaceOnly and not IsSpaceHeld then
+            return
+        end
+        
+        BunnyHopLogic()
+    end)
+end
+
+local function StopBunnyHop()
+    BunnyHopRunning = false
+    if BunnyHopConnection then
+        BunnyHopConnection:Disconnect()
+        BunnyHopConnection = nil
+    end
+end
+
+-- =====================================================
+-- KDA
+-- =====================================================
+local function UpdateKDAOverlay()
+    if not Config.KDA.ShowOverlay then
+        KDAOverlay.Visible = false
+        return
+    end
+    
+    KDAOverlay.Visible = true
+    local kills = Config.KDA.Kills
+    local deaths = Config.KDA.Deaths
+    local kd = deaths > 0 and string.format("%.1f", kills / deaths) or string.format("%.1f", kills)
+    local streak = Config.KDA.CurrentStreak
+    local maxStreak = Config.KDA.MaxStreak
+    
+    KDAOverlay.Text = string.format("K:%d | D:%d | KD:%s | Streak:%d | Max:%d", kills, deaths, kd, streak, maxStreak)
+end
+
+local function OnLocalPlayerDeath()
+    Config.KDA.Deaths = Config.KDA.Deaths + 1
+    Config.KDA.CurrentStreak = 0
+    UpdateKDAOverlay()
+end
+
+local function OnLocalPlayerKill()
+    Config.KDA.Kills = Config.KDA.Kills + 1
+    Config.KDA.CurrentStreak = Config.KDA.CurrentStreak + 1
+    if Config.KDA.CurrentStreak > Config.KDA.MaxStreak then
+        Config.KDA.MaxStreak = Config.KDA.CurrentStreak
+    end
+    UpdateKDAOverlay()
+end
+
+local function StartKDATracking()
+    if HealthCheckConnection then return end
+    
+    local char = LocalPlayer.Character
+    if char then
+        local hum = char:FindFirstChild("Humanoid")
+        if hum then LastHealth = hum.Health end
+    end
+    
+    HealthCheckConnection = RunService.Heartbeat:Connect(function()
+        local currentHealth = GetLocalHealth()
+        if LastHealth > 0 and currentHealth <= 0 then
+            OnLocalPlayerDeath()
+        end
+        LastHealth = currentHealth
+    end)
+end
+
+local function TrackKillsFromPlayers()
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            if player.Character then
+                local hum = player.Character:FindFirstChild("Humanoid")
+                if hum then
+                    hum.Died:Connect(function()
+                        if IsAlive(LocalPlayer) then
+                            local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+                            if root then
+                                local localRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                                if localRoot then
+                                    local dist = (root.Position - localRoot.Position).Magnitude
+                                    if dist < 200 then OnLocalPlayerKill() end
+                                end
+                            end
+                        end
+                    end)
+                end
+            end
+            player.CharacterAdded:Connect(function(character)
+                local hum = character:WaitForChild("Humanoid")
+                hum.Died:Connect(function()
+                    if IsAlive(LocalPlayer) then
+                        local root = character:FindFirstChild("HumanoidRootPart")
+                        if root then
+                            local localRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                            if localRoot then
+                                local dist = (root.Position - localRoot.Position).Magnitude
+                                if dist < 200 then OnLocalPlayerKill() end
+                            end
+                        end
+                    end
+                end)
+            end)
+        end
+    end
+end
+
+-- =====================================================
+-- ESP
+-- =====================================================
+local function UpdateESP()
+    if not Config.ESP.Enabled then
+        for _, objs in pairs(EspObjects) do
+            if objs.box then objs.box.Visible = false end
+            if objs.line then objs.line.Visible = false end
+            if objs.text then objs.text.Visible = false end
+        end
+        return
+    end
+
+    local viewport = Camera.ViewportSize
+    local center = Vector2.new(viewport.X/2, viewport.Y/2)
+    local camPos = Camera.CFrame.Position
+
+    for _, player in pairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        if not IsAlive(player) then
+            if EspObjects[player] then
+                if EspObjects[player].box then EspObjects[player].box.Visible = false end
+                if EspObjects[player].line then EspObjects[player].line.Visible = false end
+                if EspObjects[player].text then EspObjects[player].text.Visible = false end
+            end
+            continue
+        end
+
+        if Config.ESP.TeamCheck and IsTeam(player) then
+            if EspObjects[player] then
+                if EspObjects[player].box then EspObjects[player].box.Visible = false end
+                if EspObjects[player].line then EspObjects[player].line.Visible = false end
+                if EspObjects[player].text then EspObjects[player].text.Visible = false end
+            end
+            continue
+        end
+
+        local char = player.Character
+        if not char then continue end
+
+        local head = char:FindFirstChild("Head")
+        local root = char:FindFirstChild("HumanoidRootPart")
+        if not head or not root then continue end
+
+        local dist = (head.Position - camPos).Magnitude
+        if dist > Config.ESP.MaxDistance then
+            if EspObjects[player] then
+                if EspObjects[player].box then EspObjects[player].box.Visible = false end
+                if EspObjects[player].line then EspObjects[player].line.Visible = false end
+                if EspObjects[player].text then EspObjects[player].text.Visible = false end
+            end
+            continue
+        end
+
+        local headPos, headOn = Camera:WorldToViewportPoint(head.Position)
+        if not headOn then
+            if EspObjects[player] then
+                if EspObjects[player].box then EspObjects[player].box.Visible = false end
+                if EspObjects[player].line then EspObjects[player].line.Visible = false end
+                if EspObjects[player].text then EspObjects[player].text.Visible = false end
+            end
+            continue
+        end
+
+        local footPos
+        local footParts = {"LeftFoot", "RightFoot", "LeftLeg", "RightLeg"}
+        for _, name in ipairs(footParts) do
+            local part = char:FindFirstChild(name)
+            if part then
+                footPos, _ = Camera:WorldToViewportPoint(part.Position)
+                break
+            end
+        end
+
+        if not footPos then
+            local rootPos, _ = Camera:WorldToViewportPoint(root.Position)
+            if rootPos then
+                footPos = Vector2.new(rootPos.X, rootPos.Y + (headPos.Y - rootPos.Y) * 0.6)
+            end
+        end
+
+        if not footPos then
+            if EspObjects[player] then
+                if EspObjects[player].box then EspObjects[player].box.Visible = false end
+                if EspObjects[player].line then EspObjects[player].line.Visible = false end
+                if EspObjects[player].text then EspObjects[player].text.Visible = false end
+            end
+            continue
+        end
+
+        local height = math.abs(headPos.Y - footPos.Y) + 15
+        local width = height * 0.45
+
+        if height < 10 or height > viewport.Y then
+            if EspObjects[player] then
+                if EspObjects[player].box then EspObjects[player].box.Visible = false end
+                if EspObjects[player].line then EspObjects[player].line.Visible = false end
+                if EspObjects[player].text then EspObjects[player].text.Visible = false end
+            end
+            continue
+        end
+
+        local x = headPos.X - width/2
+        local y = footPos.Y - height
+
+        if not EspObjects[player] then
+            EspObjects[player] = {
+                box = Drawing.new("Square"),
+                line = Drawing.new("Line"),
+                text = Drawing.new("Text")
+            }
+            EspObjects[player].box.Thickness = 2
+            EspObjects[player].box.Transparency = 0.6
+            EspObjects[player].box.Filled = false
+            EspObjects[player].line.Thickness = 1
+            EspObjects[player].line.Color = Color3.fromRGB(255, 255, 255)
+            EspObjects[player].line.Transparency = 0.4
+            EspObjects[player].text.Color = Color3.fromRGB(255, 255, 255)
+            EspObjects[player].text.Size = 14
+            EspObjects[player].text.Font = 3
+            EspObjects[player].text.Outline = true
+            EspObjects[player].text.OutlineColor = Color3.fromRGB(0, 0, 0)
+            EspObjects[player].text.Center = true
+        end
+
+        local objs = EspObjects[player]
+        local hum = char:FindFirstChild("Humanoid")
+        local hp = hum and (hum.Health / hum.MaxHealth) or 1
+
+        objs.box.Size = Vector2.new(width, height)
+        objs.box.Position = Vector2.new(x, y)
+        objs.box.Visible = true
+
+        if hp < 0.25 then
+            objs.box.Color = Color3.fromRGB(255, 0, 0)
+        elseif hp < 0.5 then
+            objs.box.Color = Color3.fromRGB(255, 255, 0)
+        else
+            objs.box.Color = Color3.fromRGB(0, 255, 0)
+        end
+
+        if Config.ESP.ShowTracers then
+            objs.line.From = Vector2.new(center.X, center.Y)
+            objs.line.To = Vector2.new(headPos.X, headPos.Y + height/2)
+            objs.line.Visible = true
+        else
+            objs.line.Visible = false
+        end
+
+        local hpText = math.floor(hp * 100)
+        objs.text.Text = player.Name .. " | " .. hpText .. "%"
+        objs.text.Position = Vector2.new(headPos.X, y - 22)
+        objs.text.Visible = true
+    end
+end
+
+-- =====================================================
+-- AIMBOT
+-- =====================================================
+local function GetClosestTarget()
+    local viewport = Camera.ViewportSize
+    local center = Vector2.new(viewport.X/2, viewport.Y/2)
+    local best, bestScore = nil, -math.huge
+
+    if Config.Aimbot.HoldTarget and CurrentTarget then
+        if IsAlive(CurrentTarget) then
+            local char = CurrentTarget.Character
+            if char then
+                local head = char:FindFirstChild("Head")
+                if head then
+                    local sp, on = Camera:WorldToViewportPoint(head.Position)
+                    if on then
+                        local v = Vector2.new(sp.X, sp.Y)
+                        local d = (v - center).Magnitude
+                        if d < Config.Aimbot.FOV then
+                            return CurrentTarget
+                        end
+                    end
+                end
+            end
+        end
+        CurrentTarget = nil
+    end
+
+    for _, p in pairs(Players:GetPlayers()) do
+        if p == LocalPlayer then continue end
+        if not IsAlive(p) then continue end
+        if Config.Aimbot.TeamCheck and IsTeam(p) then continue end
+
+        local char = p.Character
+        if not char then continue end
+        local head = char:FindFirstChild("Head")
+        if not head then continue end
+
+        local sp, on = Camera:WorldToViewportPoint(head.Position)
+        if not on then continue end
+
+        local v = Vector2.new(sp.X, sp.Y)
+        local distToCenter = (v - center).Magnitude
+
+        if distToCenter > Config.Aimbot.FOV then continue end
+
+        local score = -distToCenter
+
+        if Config.Aimbot.Magnetic then
+            local magneticBonus = (1 - distToCenter / Config.Aimbot.FOV) * Config.Aimbot.MagneticStrength * 30
+            score = score - magneticBonus
+        end
+
+        if score > bestScore then
+            bestScore = score
+            best = p
+        end
+    end
+
+    if best then CurrentTarget = best
+    else CurrentTarget = nil end
+    return best
+end
+
+local function IsTargetValid(player)
+    if not player then return false end
+    if not IsAlive(player) then return false end
+    if Config.Aimbot.TeamCheck and IsTeam(player) then return false end
+
+    local char = player.Character
+    if not char then return false end
+    local head = char:FindFirstChild("Head")
+    if not head then return false end
+
+    local sp, on = Camera:WorldToViewportPoint(head.Position)
+    if not on then return false end
+
+    local viewport = Camera.ViewportSize
+    local center = Vector2.new(viewport.X/2, viewport.Y/2)
+    local v = Vector2.new(sp.X, sp.Y)
+    local distToCenter = (v - center).Magnitude
+
+    return distToCenter <= Config.Aimbot.FOV
+end
+
+local function AimAt(player)
+    if not player then return end
+    local char = player.Character
+    if not char then return end
+    local head = char:FindFirstChild("Head")
+    if not head then return end
+
+    local sp = Camera:WorldToViewportPoint(head.Position)
+    local viewport = Camera.ViewportSize
+    local center = Vector2.new(viewport.X/2, viewport.Y/2)
+
+    local deltaX = sp.X - center.X
+    local deltaY = sp.Y - center.Y
+    local dist = math.sqrt(deltaX^2 + deltaY^2)
+
+    if dist < 0.5 then return end
+
+    local moveX = deltaX
+    local moveY = deltaY
+
+    if Config.Aimbot.Magnetic then
+        local speedMult = 1 + (dist / Config.Aimbot.FOV) * 0.3
+        moveX = moveX * Config.Aimbot.Smoothness * speedMult
+        moveY = moveY * Config.Aimbot.Smoothness * speedMult
+
+        local maxStep = 35
+        moveX = math.clamp(moveX, -maxStep, maxStep)
+        moveY = math.clamp(moveY, -maxStep, maxStep)
+    else
+        moveX = math.clamp(deltaX * Config.Aimbot.Smoothness, -20, 20)
+        moveY = math.clamp(deltaY * Config.Aimbot.Smoothness, -20, 20)
+    end
+
+    mousemoverel(moveX, moveY)
+end
+
+-- =====================================================
+-- TRIGGER BOT
+-- =====================================================
+local function TriggerBotCheck()
+    if not Config.TriggerBot.Enabled then return false end
+    if not Config.Aimbot.Enabled then return false end
+
+    local now = tick()
+    if now - TriggerBotLastFire < Config.TriggerBot.Delay then return false end
+
+    local target = LockedTarget or CurrentTarget
+    if not target then return false end
+    if not IsAlive(target) then return false end
+    if Config.TriggerBot.TeamCheck and IsTeam(target) then return false end
+    if Config.TriggerBot.WallCheck and not IsVisible(target) then return false end
+
+    local char = target.Character
+    if not char then return false end
+    local head = char:FindFirstChild("Head")
+    if not head then return false end
+
+    local sp, on = Camera:WorldToViewportPoint(head.Position)
+    if not on then return false end
+
+    local viewport = Camera.ViewportSize
+    local center = Vector2.new(viewport.X/2, viewport.Y/2)
+    local v = Vector2.new(sp.X, sp.Y)
+    local distToCenter = (v - center).Magnitude
+
+    if distToCenter > Config.Aimbot.FOV then return false end
+
+    return true
+end
+
+local function TriggerBotFire()
+    TriggerBotLastFire = tick()
+    mouse1press()
+    task.wait(0.05)
+    mouse1release()
+end
+
+-- =====================================================
+-- ANTIAIM
+-- =====================================================
+local function UpdateAntiAim()
+    if not Config.AntiAim.Enabled then return end
+    local char = LocalPlayer.Character
+    if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    local t = tick() * 8
+    root.CFrame = root.CFrame * CFrame.Angles(0, math.sin(t) * 1.5, math.sin(t * 0.5) * 0.5)
+end
+
+-- =====================================================
+-- HITBOX EXPANDER
+-- =====================================================
+local function CreateExpandedHitbox(player)
+    local char = player.Character
+    if not char then return end
+
+    if HitboxObjects[player] then
+        for _, obj in pairs(HitboxObjects[player]) do
+            if obj and obj.Parent then obj:Destroy() end
+        end
+    end
+
+    HitboxObjects[player] = {}
+
+    for _, partName in ipairs(Config.HitboxExpander.PartsToExpand) do
+        local originalPart = char:FindFirstChild(partName)
+        if originalPart and originalPart:IsA("BasePart") then
+            local expander = Instance.new("Part")
+            expander.Name = "HitboxExpander_" .. partName
+            expander.Transparency = Config.HitboxExpander.TransparencyValue
+            expander.CanCollide = false
+            expander.Anchored = false
+            expander.Massless = true
+            expander.Size = originalPart.Size * Config.HitboxExpander.SizeMultiplier
+            expander.Color = Color3.fromRGB(255, 0, 0)
+
+            local weld = Instance.new("WeldConstraint")
+            weld.Part0 = expander
+            weld.Part1 = originalPart
+            weld.Parent = expander
+
+            expander.Parent = char
+            table.insert(HitboxObjects[player], expander)
+        end
+    end
+end
+
+local function RemoveExpandedHitbox(player)
+    if HitboxObjects[player] then
+        for _, obj in pairs(HitboxObjects[player]) do
+            if obj and obj.Parent then obj:Destroy() end
+        end
+        HitboxObjects[player] = nil
+    end
+end
+
+local function UpdateAllHitboxes()
+    if Config.HitboxExpander.Enabled then
+        for _, player in pairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and IsAlive(player) then
+                if Config.Aimbot.TeamCheck and IsTeam(player) then
+                    RemoveExpandedHitbox(player)
+                else
+                    CreateExpandedHitbox(player)
+                end
+            else
+                RemoveExpandedHitbox(player)
+            end
+        end
+    else
+        for _, player in pairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer then RemoveExpandedHitbox(player) end
+        end
+    end
+end
+
+Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function()
+        if Config.HitboxExpander.Enabled then
+            task.wait(1)
+            CreateExpandedHitbox(player)
+        end
+    end)
+end)
+
+-- =====================================================
+-- VELOCITY SPOOFER
+-- =====================================================
+local function StartVelocitySpoofer()
+    if VelocitySpooferRunning then return end
+    VelocitySpooferRunning = true
+
+    VelocitySpooferConnection = RunService.Heartbeat:Connect(function()
+        if not Config.VelocitySpoofer.Enabled then
+            StopVelocitySpoofer()
+            return
+        end
+
+        local char = LocalPlayer.Character
+        if not char then return end
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+
+        local origVelocity = hrp.Velocity
+
+        local randX = math.random(Config.VelocitySpoofer.X_Min * 100, Config.VelocitySpoofer.X_Max * 100) / 100
+        local randY = math.random(Config.VelocitySpoofer.Y_Min * 100, Config.VelocitySpoofer.Y_Max * 100) / 100
+        local randZ = math.random(Config.VelocitySpoofer.Z_Min * 100, Config.VelocitySpoofer.Z_Max * 100) / 100
+
+        hrp.Velocity = Vector3.new(randX, randY, randZ)
+        task.wait(Config.VelocitySpoofer.Interval)
+        hrp.Velocity = origVelocity
+    end)
+end
+
+local function StopVelocitySpoofer()
+    VelocitySpooferRunning = false
+    if VelocitySpooferConnection then
+        VelocitySpooferConnection:Disconnect()
+        VelocitySpooferConnection = nil
+    end
+end
+
+-- =====================================================
+-- СТАТУС
+-- =====================================================
+local function UpdateStatus()
+    if not Config.ShowStatus then
+        StatusText.Visible = false
+        return
+    end
+    StatusText.Visible = true
+    local esp = Config.ESP.Enabled and "ON" or "OFF"
+    local aim = Config.Aimbot.Enabled and "ON" or "OFF"
+    local tb = Config.TriggerBot.Enabled and "ON" or "OFF"
+    local bh = Config.BunnyHop.Enabled and "ON" or "OFF"
+    local target = LockedTarget or CurrentTarget
+    local targetName = target and target.Name or "NONE"
+    StatusText.Text = "ESP:"..esp.." | AIM:"..aim.." | TB:"..tb.." | BH:"..bh.." | FOV:"..Config.Aimbot.FOV.." | T:"..targetName
+end
+
+-- =====================================================
+-- ВВОД
+-- =====================================================
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        if Config.Aimbot.Enabled then
+            IsAiming = true
+
+            if Config.Aimbot.LockTarget then
+                local target = GetClosestTarget()
+                if target then
+                    LockedTarget = target
+                    CurrentTarget = target
+                    AimAt(target)
+                else
+                    LockedTarget = nil
+                    CurrentTarget = nil
+                end
+            else
+                local target = GetClosestTarget()
+                if target then
+                    CurrentTarget = target
+                    AimAt(target)
+                end
+            end
+        end
+    end
+
+    if input.KeyCode == Enum.KeyCode.Space then
+        IsSpaceHeld = true
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        IsAiming = false
+        LockedTarget = nil
+    end
+
+    if input.KeyCode == Enum.KeyCode.Space then
+        IsSpaceHeld = false
+    end
+end)
+
+-- =====================================================
+-- ОЧИСТКА
+-- =====================================================
+Players.PlayerRemoving:Connect(function(player)
+    if EspObjects[player] then
+        if EspObjects[player].box then EspObjects[player].box:Remove() end
+        if EspObjects[player].line then EspObjects[player].line:Remove() end
+        if EspObjects[player].text then EspObjects[player].text:Remove() end
+        EspObjects[player] = nil
+    end
+    RemoveExpandedHitbox(player)
+    if LockedTarget == player then LockedTarget = nil end
+    if CurrentTarget == player then CurrentTarget = nil end
+end)
+
+-- =====================================================
+-- ГЛАВНЫЙ ЦИКЛ
+-- =====================================================
+RunService.RenderStepped:Connect(function()
+    UpdateESP()
+    UpdateAntiAim()
+
+    local viewport = Camera.ViewportSize
+    FOVCircle.Position = Vector2.new(viewport.X/2, viewport.Y/2)
+    FOVCircle.Visible = Config.Aimbot.Enabled
+
+    if IsAiming and Config.Aimbot.Enabled then
+        if Config.Aimbot.LockTarget then
+            if LockedTarget then
+                if IsTargetValid(LockedTarget) then
+                    AimAt(LockedTarget)
+                    CurrentTarget = LockedTarget
+                else
+                    LockedTarget = nil
+                    CurrentTarget = nil
+                end
+            end
+        else
+            local target = GetClosestTarget()
+            if target then AimAt(target)
+            else CurrentTarget = nil end
+        end
+    end
+
+    if TriggerBotCheck() then TriggerBotFire() end
+
+    UpdateStatus()
+    UpdateKDAOverlay()
+end)
+
+task.spawn(function()
+    while task.wait(2) do
+        UpdateAllHitboxes()
+    end
+end)
+
+-- =====================================================
+-- RAYFIELD GUI
+-- =====================================================
+
+local Window = Rayfield:CreateWindow({
+    Name = "NikitaPidor",
+    LoadingTitle = "Loading...",
+    LoadingSubtitle = "v15",
+    ConfigurationSaving = {
+        Enabled = true,
+        FolderName = "NikitaPidor",
+        FileName = "BlackboxConfig"
+    },
+})
+
+local TabAimbot = Window:CreateTab("Aimbot")
+local TabTrigger = Window:CreateTab("Trigger Bot")
+local TabBunnyHop = Window:CreateTab("BunnyHop")
+local TabKDA = Window:CreateTab("KDA")
+local TabHitbox = Window:CreateTab("Hitbox Expander")
+local TabVelocity = Window:CreateTab("Velocity Spoofer")
+local TabESP = Window:CreateTab("ESP")
+local TabAntiAim = Window:CreateTab("Anti-Aim")
+local TabSettings = Window:CreateTab("Settings")
+
+-- AIMBOT
+TabAimbot:CreateToggle({
+    Name = "Enabled",
+    CurrentValue = false,
+    Flag = "AimbotEnabled",
+    Callback = function(Value)
+        Config.Aimbot.Enabled = Value
+        FOVCircle.Visible = Value
+        if not Value then CurrentTarget = nil; LockedTarget = nil end
+    end
+})
+
+TabAimbot:CreateToggle({
+    Name = "Hard Lock",
+    CurrentValue = true,
+    Flag = "LockTarget",
+    Callback = function(Value)
+        Config.Aimbot.LockTarget = Value
+        if not Value then LockedTarget = nil end
+    end
+})
+
+TabAimbot:CreateToggle({
+    Name = "Magnetic",
+    CurrentValue = true,
+    Flag = "MagneticMode",
+    Callback = function(Value) Config.Aimbot.Magnetic = Value end
+})
+
+TabAimbot:CreateSlider({
+    Name = "Smoothness",
+    Range = {1, 100},
+    Increment = 1,
+    CurrentValue = 18,
+    Flag = "Smoothness",
+    Callback = function(Value) Config.Aimbot.Smoothness = Value / 100 end
+})
+
+TabAimbot:CreateSlider({
+    Name = "Magnetic Strength",
+    Range = {1, 30},
+    Increment = 1,
+    CurrentValue = 12,
+    Flag = "MagneticStrength",
+    Callback = function(Value) Config.Aimbot.MagneticStrength = Value / 10 end
+})
+
+TabAimbot:CreateSlider({
+    Name = "FOV",
+    Range = {50, 500},
+    Increment = 10,
+    CurrentValue = 300,
+    Flag = "FOV",
+    Callback = function(Value)
+        Config.Aimbot.FOV = Value
+        FOVCircle.Radius = Value
+    end
+})
+
+TabAimbot:CreateToggle({
+    Name = "Sticky Target",
+    CurrentValue = true,
+    Flag = "HoldTarget",
+    Callback = function(Value)
+        Config.Aimbot.HoldTarget = Value
+        if not Value then CurrentTarget = nil end
+    end
+})
+
+TabAimbot:CreateToggle({
+    Name = "Team Check",
+    CurrentValue = true,
+    Flag = "TeamCheckAim",
+    Callback = function(Value)
+        Config.Aimbot.TeamCheck = Value
+        CurrentTarget = nil; LockedTarget = nil
+    end
+})
+
+-- TRIGGER BOT
+TabTrigger:CreateToggle({
+    Name = "Enabled",
+    CurrentValue = false,
+    Flag = "TriggerBotEnabled",
+    Callback = function(Value) Config.TriggerBot.Enabled = Value end
+})
+
+TabTrigger:CreateSlider({
+    Name = "Delay",
+    Range = {0, 1},
+    Increment = 0.01,
+    CurrentValue = 0.15,
+    Flag = "TriggerBotDelay",
+    Callback = function(Value) Config.TriggerBot.Delay = Value end
+})
+
+TabTrigger:CreateToggle({
+    Name = "Wall Check",
+    CurrentValue = true,
+    Flag = "TriggerBotWallCheck",
+    Callback = function(Value) Config.TriggerBot.WallCheck = Value end
+})
+
+TabTrigger:CreateToggle({
+    Name = "Team Check",
+    CurrentValue = true,
+    Flag = "TriggerBotTeamCheck",
+    Callback = function(Value) Config.TriggerBot.TeamCheck = Value end
+})
+
+-- BUNNYHOP
+TabBunnyHop:CreateToggle({
+    Name = "Enabled",
+    CurrentValue = false,
+    Flag = "BunnyHopEnabled",
+    Callback = function(Value)
+        Config.BunnyHop.Enabled = Value
+        if Value then StartBunnyHop() else StopBunnyHop() end
+    end
+})
+
+TabBunnyHop:CreateToggle({
+    Name = "Auto Strafe",
+    CurrentValue = false,
+    Flag = "BunnyHopAutoStrafe",
+    Callback = function(Value) Config.BunnyHop.AutoStrafe = Value end
+})
+
+TabBunnyHop:CreateSlider({
+    Name = "Strafe Speed",
+    Range = {1, 20},
+    Increment = 1,
+    CurrentValue = 5,
+    Flag = "BunnyHopStrafeSpeed",
+    Callback = function(Value) Config.BunnyHop.StrafeSpeed = Value end
+})
+
+TabBunnyHop:CreateSlider({
+    Name = "Strafe Smoothness",
+    Range = {1, 100},
+    Increment = 1,
+    CurrentValue = 15,
+    Flag = "BunnyHopStrafeSmoothness",
+    Callback = function(Value) Config.BunnyHop.StrafeSmoothness = Value / 100 end
+})
+
+TabBunnyHop:CreateToggle({
+    Name = "Hold Space Only",
+    CurrentValue = true,
+    Flag = "BunnyHopHoldSpace",
+    Callback = function(Value) Config.BunnyHop.HoldSpaceOnly = Value end
+})
+
+TabBunnyHop:CreateToggle({
+    Name = "Use Velocity",
+    CurrentValue = true,
+    Flag = "BunnyHopUseVelocity",
+    Callback = function(Value) Config.BunnyHop.UseVelocity = Value end
+})
+
+-- KDA
+TabKDA:CreateToggle({
+    Name = "Show Overlay",
+    CurrentValue = true,
+    Flag = "KDAOverlayVisible",
+    Callback = function(Value)
+        Config.KDA.ShowOverlay = Value
+        KDAOverlay.Visible = Value
+    end
+})
+
+TabKDA:CreateButton({
+    Name = "Reset",
+    Callback = function()
+        Config.KDA.Kills = 0
+        Config.KDA.Deaths = 0
+        Config.KDA.CurrentStreak = 0
+        Config.KDA.MaxStreak = 0
+        UpdateKDAOverlay()
+    end
+})
+
+-- HITBOX EXPANDER
+TabHitbox:CreateToggle({
+    Name = "Enabled",
+    CurrentValue = false,
+    Flag = "HitboxExpanderEnabled",
+    Callback = function(Value)
+        Config.HitboxExpander.Enabled = Value
+        UpdateAllHitboxes()
+    end
+})
+
+TabHitbox:CreateSlider({
+    Name = "Size Multiplier",
+    Range = {1, 10},
+    Increment = 0.1,
+    CurrentValue = 2.0,
+    Flag = "HitboxSizeMultiplier",
+    Callback = function(Value)
+        Config.HitboxExpander.SizeMultiplier = Value
+        if Config.HitboxExpander.Enabled then UpdateAllHitboxes() end
+    end
+})
+
+TabHitbox:CreateSlider({
+    Name = "Transparency",
+    Range = {0, 1},
+    Increment = 0.1,
+    CurrentValue = 0.7,
+    Flag = "HitboxTransparency",
+    Callback = function(Value)
+        Config.HitboxExpander.TransparencyValue = Value
+        if Config.HitboxExpander.Enabled then UpdateAllHitboxes() end
+    end
+})
+
+-- VELOCITY SPOOFER
+TabVelocity:CreateToggle({
+    Name = "Enabled",
+    CurrentValue = false,
+    Flag = "VelocitySpooferEnabled",
+    Callback = function(Value)
+        Config.VelocitySpoofer.Enabled = Value
+        if Value then StartVelocitySpoofer() else StopVelocitySpoofer() end
+    end
+})
+
+TabVelocity:CreateSlider({Name = "X Min", Range = {-500, 500}, Increment = 10, CurrentValue = -100, Flag = "VS_X_Min", Callback = function(Value) Config.VelocitySpoofer.X_Min = Value end})
+TabVelocity:CreateSlider({Name = "X Max", Range = {-500, 500}, Increment = 10, CurrentValue = 100, Flag = "VS_X_Max", Callback = function(Value) Config.VelocitySpoofer.X_Max = Value end})
+TabVelocity:CreateSlider({Name = "Y Min", Range = {-500, 500}, Increment = 10, CurrentValue = 0, Flag = "VS_Y_Min", Callback = function(Value) Config.VelocitySpoofer.Y_Min = Value end})
+TabVelocity:CreateSlider({Name = "Y Max", Range = {-500, 500}, Increment = 10, CurrentValue = 50, Flag = "VS_Y_Max", Callback = function(Value) Config.VelocitySpoofer.Y_Max = Value end})
+TabVelocity:CreateSlider({Name = "Z Min", Range = {-500, 500}, Increment = 10, CurrentValue = -100, Flag = "VS_Z_Min", Callback = function(Value) Config.VelocitySpoofer.Z_Min = Value end})
+TabVelocity:CreateSlider({Name = "Z Max", Range = {-500, 500}, Increment = 10, CurrentValue = 100, Flag = "VS_Z_Max", Callback = function(Value) Config.VelocitySpoofer.Z_Max = Value end})
+TabVelocity:CreateSlider({Name = "Interval", Range = {0.01, 0.5}, Increment = 0.01, CurrentValue = 0.05, Flag = "VS_Interval", Callback = function(Value) Config.VelocitySpoofer.Interval = Value end})
+
+-- ESP
+TabESP:CreateToggle({
+    Name = "Enabled",
+    CurrentValue = false,
+    Flag = "ESPEnabled",
+    Callback = function(Value)
+        Config.ESP.Enabled = Value
+        if not Value then
+            for _, objs in pairs(EspObjects) do
+                if objs.box then objs.box.Visible = false end
+                if objs.line then objs.line.Visible = false end
+                if objs.text then objs.text.Visible = false end
+            end
+        end
+    end
+})
+
+TabESP:CreateToggle({
+    Name = "Tracers",
+    CurrentValue = true,
+    Flag = "ESPTracers",
+    Callback = function(Value)
+        Config.ESP.ShowTracers = Value
+        if not Value then
+            for _, objs in pairs(EspObjects) do
+                if objs.line then objs.line.Visible = false end
+            end
+        end
+    end
+})
+
+TabESP:CreateToggle({
+    Name = "Team Check",
+    CurrentValue = true,
+    Flag = "ESPTeamCheck",
+    Callback = function(Value) Config.ESP.TeamCheck = Value end
+})
+
+TabESP:CreateSlider({
+    Name = "Max Distance",
+    Range = {100, 2000},
+    Increment = 50,
+    CurrentValue = 500,
+    Flag = "ESPMaxDistance",
+    Callback = function(Value) Config.ESP.MaxDistance = Value end
+})
+
+-- ANTI-AIM
+TabAntiAim:CreateToggle({
+    Name = "Enabled",
+    CurrentValue = false,
+    Flag = "AntiAimEnabled",
+    Callback = function(Value) Config.AntiAim.Enabled = Value end
+})
+
+-- SETTINGS
+TabSettings:CreateToggle({
+    Name = "Status Overlay",
+    CurrentValue = true,
+    Flag = "ShowStatus",
+    Callback = function(Value)
+        Config.ShowStatus = Value
+        StatusText.Visible = Value
+    end
+})
+
+TabSettings:CreateButton({
+    Name = "Reset Target",
+    Callback = function()
+        CurrentTarget = nil
+        LockedTarget = nil
+        UpdateStatus()
+    end
+})
+
+TabSettings:CreateButton({
+    Name = "Unload",
+    Callback = function()
+        StopVelocitySpoofer()
+        StopBunnyHop()
+        if HealthCheckConnection then HealthCheckConnection:Disconnect() end
+        FOVCircle:Remove()
+        StatusText:Remove()
+        KDAOverlay:Remove()
+        for _, objs in pairs(EspObjects) do
+            if objs.box then objs.box:Remove() end
+            if objs.line then objs.line:Remove() end
+            if objs.text then objs.text:Remove() end
+        end
+        for player, _ in pairs(HitboxObjects) do RemoveExpandedHitbox(player) end
+        EspObjects = {}
+        Window:Destroy()
+    end
+})
+
+-- =====================================================
+-- СТАРТ
+-- =====================================================
+UpdateStatus()
+UpdateKDAOverlay()
+StartKDATracking()
+TrackKillsFromPlayers()
