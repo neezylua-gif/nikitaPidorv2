@@ -1,4 +1,5 @@
 
+--конфиг спижен с рейфилда
 
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 
@@ -10,9 +11,7 @@ local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 local Mouse = LocalPlayer:GetMouse()
 
--- =====================================================
--- КОНФИГ
--- =====================================================
+
 local Config = {
     ESP = {
         Enabled = false,
@@ -75,9 +74,7 @@ local Config = {
     }
 }
 
--- =====================================================
--- СОСТОЯНИЯ
--- =====================================================
+
 local IsAiming = false
 local CurrentTarget = nil
 local LockedTarget = nil
@@ -94,9 +91,7 @@ local WasOnGround = true
 local LastJumpTime = 0
 local StrafeDirection = 1
 
--- =====================================================
--- DRAWING ОБЪЕКТЫ
--- =====================================================
+
 local FOVCircle = Drawing.new("Circle")
 FOVCircle.Visible = false
 FOVCircle.Radius = Config.Aimbot.FOV
@@ -129,9 +124,7 @@ KDAOverlay.OutlineColor = Color3.fromRGB(0, 0, 0)
 
 local EspObjects = {}
 
--- =====================================================
--- ПРОВЕРКИ
--- =====================================================
+
 local function IsAlive(player)
     if not player or not player.Parent then return false end
     local char = player.Character
@@ -178,9 +171,7 @@ local function IsVisible(targetPlayer)
     return raycastResult == nil
 end
 
--- =====================================================
--- BUNNYHOP
--- =====================================================
+
 local function IsOnGround()
     local char = LocalPlayer.Character
     if not char then return false end
@@ -375,9 +366,7 @@ local function StopBunnyHop()
     end
 end
 
--- =====================================================
--- KDA
--- =====================================================
+
 local function UpdateKDAOverlay()
     if not Config.KDA.ShowOverlay then
         KDAOverlay.Visible = false
@@ -466,9 +455,7 @@ local function TrackKillsFromPlayers()
     end
 end
 
--- =====================================================
--- ESP
--- =====================================================
+
 local function UpdateESP()
     if not Config.ESP.Enabled then
         for _, objs in pairs(EspObjects) do
@@ -622,9 +609,7 @@ local function UpdateESP()
     end
 end
 
--- =====================================================
--- AIMBOT
--- =====================================================
+
 local function GetClosestTarget()
     local viewport = Camera.ViewportSize
     local center = Vector2.new(viewport.X/2, viewport.Y/2)
@@ -743,9 +728,7 @@ local function AimAt(player)
     mousemoverel(moveX, moveY)
 end
 
--- =====================================================
--- TRIGGER BOT
--- =====================================================
+
 local function TriggerBotCheck()
     if not Config.TriggerBot.Enabled then return false end
     if not Config.Aimbot.Enabled then return false end
@@ -784,9 +767,7 @@ local function TriggerBotFire()
     mouse1release()
 end
 
--- =====================================================
--- ANTIAIM
--- =====================================================
+
 local function UpdateAntiAim()
     if not Config.AntiAim.Enabled then return end
     local char = LocalPlayer.Character
@@ -797,9 +778,7 @@ local function UpdateAntiAim()
     root.CFrame = root.CFrame * CFrame.Angles(0, math.sin(t) * 1.5, math.sin(t * 0.5) * 0.5)
 end
 
--- =====================================================
--- HITBOX EXPANDER
--- =====================================================
+
 local function CreateExpandedHitbox(player)
     local char = player.Character
     if not char then return end
@@ -873,9 +852,7 @@ Players.PlayerAdded:Connect(function(player)
     end)
 end)
 
--- =====================================================
--- VELOCITY SPOOFER
--- =====================================================
+
 local function StartVelocitySpoofer()
     if VelocitySpooferRunning then return end
     VelocitySpooferRunning = true
@@ -911,9 +888,7 @@ local function StopVelocitySpoofer()
     end
 end
 
--- =====================================================
--- СТАТУС
--- =====================================================
+
 local function UpdateStatus()
     if not Config.ShowStatus then
         StatusText.Visible = false
@@ -929,9 +904,7 @@ local function UpdateStatus()
     StatusText.Text = "ESP:"..esp.." | AIM:"..aim.." | TB:"..tb.." | BH:"..bh.." | FOV:"..Config.Aimbot.FOV.." | T:"..targetName
 end
 
--- =====================================================
--- ВВОД
--- =====================================================
+
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
 
@@ -975,9 +948,6 @@ UserInputService.InputEnded:Connect(function(input)
     end
 end)
 
--- =====================================================
--- ОЧИСТКА
--- =====================================================
 Players.PlayerRemoving:Connect(function(player)
     if EspObjects[player] then
         if EspObjects[player].box then EspObjects[player].box:Remove() end
@@ -990,9 +960,6 @@ Players.PlayerRemoving:Connect(function(player)
     if CurrentTarget == player then CurrentTarget = nil end
 end)
 
--- =====================================================
--- ГЛАВНЫЙ ЦИКЛ
--- =====================================================
 RunService.RenderStepped:Connect(function()
     UpdateESP()
     UpdateAntiAim()
@@ -1031,18 +998,16 @@ task.spawn(function()
     end
 end)
 
--- =====================================================
--- RAYFIELD GUI
--- =====================================================
+
 
 local Window = Rayfield:CreateWindow({
     Name = "NikitaPidor",
     LoadingTitle = "Loading...",
-    LoadingSubtitle = "v15",
+    LoadingSubtitle = "nikitanepidor",
     ConfigurationSaving = {
         Enabled = true,
         FolderName = "NikitaPidor",
-        FileName = "BlackboxConfig"
+        FileName = "cfg"
     },
 })
 
@@ -1056,7 +1021,7 @@ local TabESP = Window:CreateTab("ESP")
 local TabAntiAim = Window:CreateTab("Anti-Aim")
 local TabSettings = Window:CreateTab("Settings")
 
--- AIMBOT
+
 TabAimbot:CreateToggle({
     Name = "Enabled",
     CurrentValue = false,
@@ -1135,7 +1100,7 @@ TabAimbot:CreateToggle({
     end
 })
 
--- TRIGGER BOT
+
 TabTrigger:CreateToggle({
     Name = "Enabled",
     CurrentValue = false,
@@ -1166,7 +1131,7 @@ TabTrigger:CreateToggle({
     Callback = function(Value) Config.TriggerBot.TeamCheck = Value end
 })
 
--- BUNNYHOP
+
 TabBunnyHop:CreateToggle({
     Name = "Enabled",
     CurrentValue = false,
@@ -1216,7 +1181,7 @@ TabBunnyHop:CreateToggle({
     Callback = function(Value) Config.BunnyHop.UseVelocity = Value end
 })
 
--- KDA
+
 TabKDA:CreateToggle({
     Name = "Show Overlay",
     CurrentValue = true,
@@ -1238,7 +1203,7 @@ TabKDA:CreateButton({
     end
 })
 
--- HITBOX EXPANDER
+
 TabHitbox:CreateToggle({
     Name = "Enabled",
     CurrentValue = false,
@@ -1273,7 +1238,7 @@ TabHitbox:CreateSlider({
     end
 })
 
--- VELOCITY SPOOFER
+
 TabVelocity:CreateToggle({
     Name = "Enabled",
     CurrentValue = false,
@@ -1292,7 +1257,7 @@ TabVelocity:CreateSlider({Name = "Z Min", Range = {-500, 500}, Increment = 10, C
 TabVelocity:CreateSlider({Name = "Z Max", Range = {-500, 500}, Increment = 10, CurrentValue = 100, Flag = "VS_Z_Max", Callback = function(Value) Config.VelocitySpoofer.Z_Max = Value end})
 TabVelocity:CreateSlider({Name = "Interval", Range = {0.01, 0.5}, Increment = 0.01, CurrentValue = 0.05, Flag = "VS_Interval", Callback = function(Value) Config.VelocitySpoofer.Interval = Value end})
 
--- ESP
+
 TabESP:CreateToggle({
     Name = "Enabled",
     CurrentValue = false,
@@ -1339,7 +1304,7 @@ TabESP:CreateSlider({
     Callback = function(Value) Config.ESP.MaxDistance = Value end
 })
 
--- ANTI-AIM
+
 TabAntiAim:CreateToggle({
     Name = "Enabled",
     CurrentValue = false,
@@ -1347,7 +1312,7 @@ TabAntiAim:CreateToggle({
     Callback = function(Value) Config.AntiAim.Enabled = Value end
 })
 
--- SETTINGS
+
 TabSettings:CreateToggle({
     Name = "Status Overlay",
     CurrentValue = true,
@@ -1387,9 +1352,7 @@ TabSettings:CreateButton({
     end
 })
 
--- =====================================================
--- СТАРТ
--- =====================================================
+
 UpdateStatus()
 UpdateKDAOverlay()
 StartKDATracking()
